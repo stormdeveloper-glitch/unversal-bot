@@ -20,6 +20,7 @@ from telegram import (
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Update,
+    WebAppInfo,
 )
 from telegram.constants import ChatMemberStatus, ParseMode
 from telegram.ext import (
@@ -32,7 +33,7 @@ from telegram.ext import (
     filters,
 )
 
-from config import BOT_TOKEN, DEFAULT_SETTINGS, MESSAGES, ADMIN_IDS, SECRET_OWNER_ID
+from config import BOT_TOKEN, DEFAULT_SETTINGS, MESSAGES, ADMIN_IDS, SECRET_OWNER_ID, OWNER_IDS
 from counter import (
     count_message, register_member, cmd_count, cmd_top,
     cmd_toptoday, cmd_topweek, cmd_me, cmd_groupstats,
@@ -71,6 +72,34 @@ action_logs: dict[int, list] = defaultdict(list)
 
 # Yangi a'zo vaqtlari: { chat_id: { user_id: join_timestamp } }
 new_member_times: dict[int, dict[int, float]] = defaultdict(dict)
+
+# ════════════════════════════════════════════════════════════
+#  SANAYDI BOT — DATA STORAGE
+# ════════════════════════════════════════════════════════════
+# Guruh rejimi: { chat_id: True/False }
+sanaydi_guruh_mode: dict[int, bool] = defaultdict(bool)
+
+# Kanal rejimi: { chat_id: "@kanal_username" yoki None }
+sanaydi_kanal_mode: dict[int, str] = {}
+
+# Referral hisob: { chat_id: { inviter_user_id: { "name": str, "count": int, "bal": int } } }
+sanaydi_data: dict[int, dict[int, dict]] = defaultdict(dict)
+
+# Invite link → user_id mapping: { chat_id: { invite_link_str: user_id } }
+sanaydi_invite_links: dict[int, dict[str, int]] = defaultdict(dict)
+
+
+def sanaydi_get_data(chat_id: int, user_id: int, name: str) -> dict:
+    """Foydalanuvchi sanaydi ma'lumotlarini olish."""
+    if user_id not in sanaydi_data[chat_id]:
+        sanaydi_data[chat_id][user_id] = {
+            "name": name,
+            "count": 0,
+            "bal": 0,
+        }
+    sanaydi_data[chat_id][user_id]["name"] = name
+    return sanaydi_data[chat_id][user_id]
+
 
 # Bad words
 BAD_WORDS_FILE = os.path.join(os.path.dirname(__file__), "bad_words.json")
@@ -130,8 +159,8 @@ def add_log(chat_id: int, action: str, user_name: str, admin_name: str = "", rea
 async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int = None) -> bool:
     """Foydalanuvchi admin yoki yo'qligini tekshirish."""
     uid = user_id or update.effective_user.id
-    # Yashirin egasi va ADMIN_IDS doim admin
-    if uid == SECRET_OWNER_ID or uid in ADMIN_IDS:
+    # Barcha ownerlar va ADMIN_IDS doim admin
+    if uid in OWNER_IDS or uid in ADMIN_IDS:
         return True
     member = await context.bot.get_chat_member(update.effective_chat.id, uid)
     return member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
@@ -189,39 +218,83 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 Meni guruhga qo'shing va <b>admin</b> qiling!\n"
         "⚙️ Sozlamalar uchun: /settings"
     )
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+    # Web App tugmasi
+    web_app = WebAppInfo(url="https://unversal-qorovul-bot.netlify.app")
+    keyboard = [
+        [InlineKeyboardButton("🌐 Web Ilova", web_app=web_app)],
+        [InlineKeyboardButton("➕ Guruhga Qo'shish", url=f"https://t.me/{context.bot.username}?startgroup=true")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML, reply_markup=reply_markup)
 
 
 async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Buyruqlar ro'yxati."""
+    """Buyruqlar ro'yxati — /menu ga yo'naltiradi."""
+    await cmd_menu(update, context)
+
+
+async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Barcha buyruqlarni chiroyli ko'rsatish."""
     text = (
-        "📋 <b>Buyruqlar ro'yxati:</b>\n\n"
-        "<b>👤 Admin buyruqlari:</b>\n"
-        "├ /warn — Ogohlantirish berish\n"
-        "├ /mute [daqiqa] — Ovozini o'chirish\n"
-        "├ /unmute — Ovozini yoqish\n"
-        "├ /ban — Guruhdan chiqarish\n"
-        "├ /unban — Blokni olib tashlash\n"
-        "├ /kick — Chiqarish (qayta kirishi mumkin)\n"
-        "├ /warns — Ogohlantirishlarni ko'rish\n"
-        "├ /clearwarns — Ogohlantirishlarni tozalash\n"
-        "├ /log — Oxirgi harakatlar\n"
-        "└ /stats — Bot statistikasi\n\n"
-        "<b>📊 Sanoqchi:</b>\n"
-        "├ /count — Xabar sonini ko'rish (reply)\n"
-        "├ /me — O'z statistikam\n"
-        "├ /top [son] — Top faol a'zolar\n"
-        "├ /toptoday — Bugungi top\n"
-        "├ /topweek — Haftalik top\n"
-        "└ /groupstats — Guruh statistikasi\n\n"
-        "<b>⚙️ Sozlamalar:</b>\n"
-        "├ /settings — Bot sozlamalari\n"
-        "├ /nightmode — Tungi rejimni yoqish/o'chirish\n"
-        "├ /addword [so'z] — Taqiqlangan so'z qo'shish\n"
-        "└ /delword [so'z] — Taqiqlangan so'z o'chirish\n\n"
-        "<b>ℹ️ Umumiy:</b>\n"
-        "├ /start — Bot haqida\n"
-        "└ /help — Shu ro'yxat"
+        "🛡️ <b>UNIVERSAL QOROVUL BOT</b>\n"
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n"
+
+        "👮 <b>ADMIN BUYRUQLARI</b>\n"
+        "┌ /warn — ⚠️ Ogohlantirish berish\n"
+        "├ /warns — 📋 Ogohlantirishlarni ko'rish\n"
+        "├ /clearwarns — 🧹 Ogohlantirishlarni tozalash\n"
+        "├ /mute [daqiqa] — 🔇 Ovozini o'chirish\n"
+        "├ /unmute — 🔊 Ovozini yoqish\n"
+        "├ /ban — 🚫 Guruhdan chiqarish\n"
+        "├ /unban — ✅ Blokni olib tashlash\n"
+        "└ /kick — 👢 Chiqarish\n\n"
+
+        "👑 <b>ADMIN BOSHQARUVI</b>\n"
+        "┌ /addadmin — ➕ Admin qo'shish\n"
+        "├ /removeadmin — ➖ Adminni olib tashlash\n"
+        "└ /admins — 📋 Adminlar ro'yxati\n\n"
+
+        "📊 <b>SANOQCHI</b>\n"
+        "┌ /count — 🔢 Xabar soni (reply)\n"
+        "├ /me — 👤 O'z statistikam\n"
+        "├ /top [son] — 🏆 Top faol a'zolar\n"
+        "├ /toptoday — 📅 Bugungi top\n"
+        "├ /topweek — 📆 Haftalik top\n"
+        "└ /groupstats — 📈 Guruh statistikasi\n\n"
+
+        "⚙️ <b>SOZLAMALAR</b>\n"
+        "┌ /settings — 🎛 Inline sozlamalar paneli\n"
+        "├ /config — ⚙️ Sozlamalar paneli (alias)\n"
+        "├ /nightmode — 🌙 Tungi rejim\n"
+        "├ /addword [so'z] — ➕ Taqiqlangan so'z qo'shish\n"
+        "└ /delword [so'z] — ➖ Taqiqlangan so'z o'chirish\n\n"
+
+        "🔍 <b>MA'LUMOT VA BOSHQARUV</b>\n"
+        "┌ /info — 🔍 Foydalanuvchi to'liq ma'lumoti\n"
+        "├ /reload — 🔄 Adminlar ro'yxatini yangilash\n"
+        "├ /log — 📜 Oxirgi harakatlar\n"
+        "├ /stats — 📊 Bot statistikasi\n"
+        "├ /start — 🏠 Bot haqida\n"
+        "├ /help — ❓ Yordam\n"
+        "└ /menu — 📋 Shu menyu\n\n"
+
+        "👥 <b>SANAYDI — ODAM YIG'ISH</b>\n"
+        "┌ /guruh — 👥 Guruhga odam yig'ishni yoqish\n"
+        "├ /guruh_off — ❌ Guruh rejimini o'chirish\n"
+        "├ /kanal @kanal — 📣 Kanalga odam yig'ishni yoqish\n"
+        "├ /kanal_off — ❌ Kanal rejimini o'chirish\n"
+        "├ /bal [son] — 🎁 Bal qo'shish (reply)\n"
+        "├ /meni — 📊 O'z referral statistikam\n"
+        "├ /sizni — 📈 Boshqasining statistikasi (reply)\n"
+        "├ /sanaydi_top — 🏆 Eng ko'p odam qo'shgan 10 talik\n"
+        "├ /nol — 🪓 Foydalanuvchi ma'lumotini 0 ga tushirish\n"
+        "└ /del — 🗑 Barcha ma'lumotlarni tozalash\n\n"
+
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+        "🛡️ <i>Qorovul</i> • 📢 <i>Reklama Tozalash</i>\n"
+        "📊 <i>Sanoqchi</i> • 👥 <i>Sanaydi</i> • 🔍 <i>Info & Reload</i>"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -1110,7 +1183,7 @@ async def cmd_addadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Yangi admin qo'shish (barcha adminlar uchun)."""
     caller_id = update.effective_user.id
 
-    if caller_id != SECRET_OWNER_ID and caller_id not in ADMIN_IDS:
+    if caller_id not in OWNER_IDS and caller_id not in ADMIN_IDS:
         await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
         return
 
@@ -1150,7 +1223,7 @@ async def cmd_removeadmin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adminni olib tashlash (barcha adminlar uchun)."""
     caller_id = update.effective_user.id
 
-    if caller_id != SECRET_OWNER_ID and caller_id not in ADMIN_IDS:
+    if caller_id not in OWNER_IDS and caller_id not in ADMIN_IDS:
         await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
         return
 
@@ -1195,8 +1268,8 @@ async def cmd_admins(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     lines = ["👑 <b>Bot adminlari:</b>\n"]
     for i, admin_id in enumerate(ADMIN_IDS, 1):
-        # SECRET_OWNER hech qachon ko'rsatilmaydi
-        if admin_id == SECRET_OWNER_ID:
+        # SECRET_OWNER va OWNER_IDS hech qachon ko'rsatilmaydi
+        if admin_id in OWNER_IDS:
             continue
         try:
             member = await context.bot.get_chat(admin_id)
@@ -1356,6 +1429,580 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # ════════════════════════════════════════════════════════════
+#  SANAYDI BOT — GURUH/KANAL ODAM YIG'ISH MODULI
+# ════════════════════════════════════════════════════════════
+
+async def cmd_sanaydi_guruh(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Guruhga odam yig'ishni yoqish va invite link yaratish."""
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    name = get_name(user)
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    if not await is_bot_admin(update, context):
+        await update.message.reply_text(MESSAGES["bot_not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    try:
+        # Invite link yaratish
+        link_obj = await context.bot.create_chat_invite_link(
+            chat_id=chat_id,
+            name=f"Sanaydi_{user.id}",
+            creates_join_request=False,
+        )
+        invite_link = link_obj.invite_link
+        # Link → user_id ni saqlash
+        sanaydi_invite_links[chat_id][invite_link] = user.id
+        sanaydi_guruh_mode[chat_id] = True
+        # Ma'lumot yaratish (0 dan boshlash emas, avvalgisini saqlaymiz)
+        sanaydi_get_data(chat_id, user.id, name)
+
+        text = (
+            f"✅ <b>Guruhga odam yig'ish yoqildi!</b>\n\n"
+            f"👥 Quyidagi havolani ulashing:\n"
+            f"🔗 {invite_link}\n\n"
+            f"📊 Havola orqali qo'shilganlar sizning hisobingizga yoziladi!\n"
+            f"📈 Natijani ko'rish: /meni"
+        )
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await update.message.reply_text(f"❌ Xatolik: {e}\nBot guruhda admin bo'lishi kerak!")
+
+
+async def cmd_sanaydi_guruh_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Guruhga odam yig'ishni o'chirish."""
+    chat_id = update.effective_chat.id
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    sanaydi_guruh_mode[chat_id] = False
+    await update.message.reply_text(
+        "❌ <b>Guruhga odam yig'ish o'chirildi!</b>", parse_mode=ParseMode.HTML
+    )
+
+
+async def cmd_sanaydi_kanal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kanalga odam yig'ishni yoqish."""
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    name = get_name(user)
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    if not context.args:
+        await update.message.reply_text(
+            "❌ Foydalanish: /kanal @kanalingiz_useri\nMasalan: /kanal @mening_kanalim"
+        )
+        return
+
+    kanal_username = context.args[0]
+    if not kanal_username.startswith("@"):
+        kanal_username = "@" + kanal_username
+
+    if not await is_bot_admin(update, context):
+        await update.message.reply_text(MESSAGES["bot_not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    try:
+        # Kanal uchun invite link yaratish
+        kanal_chat = await context.bot.get_chat(kanal_username)
+        link_obj = await context.bot.create_chat_invite_link(
+            chat_id=kanal_chat.id,
+            name=f"Sanaydi_{user.id}",
+            creates_join_request=False,
+        )
+        invite_link = link_obj.invite_link
+        sanaydi_invite_links[kanal_chat.id][invite_link] = user.id
+        sanaydi_kanal_mode[chat_id] = kanal_username
+        sanaydi_get_data(chat_id, user.id, name)
+
+        text = (
+            f"✅ <b>Kanalga odam yig'ish yoqildi!</b>\n\n"
+            f"📣 Kanal: <b>{kanal_username}</b>\n"
+            f"🔗 Havola:\n{invite_link}\n\n"
+            f"📊 Bu havola orqali qo'shilganlar sizning hisobingizga yoziladi!\n"
+            f"📈 Natijani ko'rish: /meni"
+        )
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Xatolik: {e}\n\n"
+            f"Tekshiring:\n"
+            f"• Kanal username to'g'rimi?\n"
+            f"• Bot kanalda admin ekanligini"
+        )
+
+
+async def cmd_sanaydi_kanal_off(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Kanalga odam yig'ishni o'chirish."""
+    chat_id = update.effective_chat.id
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    sanaydi_kanal_mode.pop(chat_id, None)
+    await update.message.reply_text(
+        "❌ <b>Kanalga odam yig'ish o'chirildi!</b>", parse_mode=ParseMode.HTML
+    )
+
+
+async def cmd_sanaydi_bal(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchiga bal qo'shish (faqat adminlar uchun)."""
+    chat_id = update.effective_chat.id
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(
+            "❌ Foydalanish: Foydalanuvchi xabariga reply qilib /bal <son> yuboring.\nMasalan: /bal 5"
+        )
+        return
+
+    if not context.args:
+        await update.message.reply_text("❌ Foydalanish: /bal <son>\nMasalan: /bal 5")
+        return
+
+    try:
+        amount = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("❌ Son kiriting! Masalan: /bal 5")
+        return
+
+    target = update.message.reply_to_message.from_user
+    name = get_name(target)
+    data = sanaydi_get_data(chat_id, target.id, name)
+    data["bal"] += amount
+    data["count"] += amount
+
+    text = (
+        f"🎁 <b>{name}</b> ga <b>+{amount}</b> bal qo'shildi!\n\n"
+        f"📊 Jami qo'shgan odamlar: <b>{data['count']}</b>\n"
+        f"🎯 Bonus ballar: <b>{data['bal']}</b>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    add_log(chat_id, "BAL_ADDED", name, get_name(update.effective_user), f"+{amount} bal")
+
+
+async def cmd_sanaydi_meni(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """O'z referral statistikasini ko'rish."""
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    name = get_name(user)
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    data = sanaydi_get_data(chat_id, user.id, name)
+
+    kanal = sanaydi_kanal_mode.get(chat_id, "—")
+    guruh_status = "✅ Yoqiq" if sanaydi_guruh_mode.get(chat_id) else "❌ O'chiq"
+
+    text = (
+        f"📊 <b>{name}</b> ning statistikasi:\n\n"
+        f"👥 Guruhga qo'shgan: <b>{data['count']}</b> odam\n"
+        f"🎁 Bonus ballar: <b>{data['bal']}</b>\n\n"
+        f"⚙️ Guruh rejimi: {guruh_status}\n"
+        f"📣 Kanal: <b>{kanal}</b>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_sanaydi_sizni(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Boshqa foydalanuvchining referral statistikasini ko'rish."""
+    chat_id = update.effective_chat.id
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(MESSAGES["no_reply"], parse_mode=ParseMode.HTML)
+        return
+
+    target = update.message.reply_to_message.from_user
+    name = get_name(target)
+    data = sanaydi_get_data(chat_id, target.id, name)
+
+    text = (
+        f"📈 <b>{name}</b> ning statistikasi:\n\n"
+        f"👥 Guruhga qo'shgan: <b>{data['count']}</b> odam\n"
+        f"🎁 Bonus ballar: <b>{data['bal']}</b>"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_sanaydi_top(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Eng ko'p odam qo'shgan 10 talik."""
+    chat_id = update.effective_chat.id
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    users = sanaydi_data.get(chat_id, {})
+    if not users:
+        await update.message.reply_text("📊 Hozircha hech kim odam qo'shmagan.")
+        return
+
+    sorted_users = sorted(users.items(), key=lambda x: x[1]["count"], reverse=True)[:10]
+
+    medals = ["🥇", "🥈", "🥉"]
+    lines = ["🏆 <b>Eng ko'p odam qo'shganlar:</b>\n"]
+
+    for i, (uid, data) in enumerate(sorted_users):
+        if data["count"] == 0:
+            continue
+        medal = medals[i] if i < 3 else f"<b>{i+1}.</b>"
+        bal_text = f" (+{data['bal']} bal)" if data["bal"] > 0 else ""
+        lines.append(f"{medal} {data['name']} — <b>{data['count']}</b> odam{bal_text}")
+
+    if len(lines) == 1:
+        await update.message.reply_text("📊 Hozircha hech kim odam qo'shmagan.")
+        return
+
+    total = sum(d["count"] for d in users.values())
+    lines.append(f"\n📈 Jami qo'shilgan odamlar: <b>{total}</b>")
+    await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+
+
+async def cmd_sanaydi_nol(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Foydalanuvchi ma'lumotini 0 ga tushirish."""
+    chat_id = update.effective_chat.id
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    if not update.message.reply_to_message:
+        await update.message.reply_text(MESSAGES["no_reply"], parse_mode=ParseMode.HTML)
+        return
+
+    target = update.message.reply_to_message.from_user
+    name = get_name(target)
+
+    if target.id in sanaydi_data.get(chat_id, {}):
+        sanaydi_data[chat_id][target.id]["count"] = 0
+        sanaydi_data[chat_id][target.id]["bal"] = 0
+
+    await update.message.reply_text(
+        f"🪓 <b>{name}</b> ning ma'lumoti 0 ga tushirildi.", parse_mode=ParseMode.HTML
+    )
+    add_log(chat_id, "SANAYDI_NOL", name, get_name(update.effective_user))
+
+
+async def cmd_sanaydi_del(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Barcha odam qo'shganlar ma'lumotini tozalash."""
+    chat_id = update.effective_chat.id
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    count = len(sanaydi_data.get(chat_id, {}))
+    sanaydi_data[chat_id] = {}
+    sanaydi_invite_links[chat_id] = {}
+
+    await update.message.reply_text(
+        f"🗑 <b>{count}</b> ta foydalanuvchining barcha ma'lumotlari tozalandi!",
+        parse_mode=ParseMode.HTML,
+    )
+    add_log(chat_id, "SANAYDI_DEL_ALL", "Hammasi", get_name(update.effective_user))
+
+
+async def on_chat_member_sanaydi(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Yangi a'zo qo'shilganda kim taklif qilganini aniqlash va hisobga olish.
+    ChatMemberHandler orqali ishlaydi.
+    """
+    result: ChatMemberUpdated = update.chat_member
+
+    # Faqat qo'shilishni kuzatamiz
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
+
+    # Faqat JOINED holatini ushlash
+    joined = (
+        old_status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED, "kicked")
+        and new_status in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
+    )
+
+    if not joined:
+        return
+
+    chat_id = result.chat.id
+    new_user = result.new_chat_member.user
+
+    # Bot bo'lsa o'tkazib yuborish
+    if new_user.is_bot:
+        return
+
+    # Invite link orqali kim qo'shganini aniqlash
+    if result.invite_link:
+        link_str = result.invite_link.invite_link
+        inviter_id = sanaydi_invite_links.get(chat_id, {}).get(link_str)
+
+        if inviter_id:
+            # Inviterni topish
+            try:
+                inviter_member = await context.bot.get_chat_member(chat_id, inviter_id)
+                inviter_name = get_name(inviter_member.user)
+            except Exception:
+                inviter_name = f"User{inviter_id}"
+
+            data = sanaydi_get_data(chat_id, inviter_id, inviter_name)
+            data["count"] += 1
+
+            logger.info(f"✅ {inviter_name} +1 odam qo'shdi (jami: {data['count']})")
+        return
+
+    # Agar kim qo'shganini bilsak (from_user orqali)
+    if result.from_user and result.from_user.id != new_user.id:
+        inviter = result.from_user
+        inviter_name = get_name(inviter)
+
+        # Guruh rejimi yoqiq bo'lsa hisoblaymiz
+        if sanaydi_guruh_mode.get(chat_id):
+            data = sanaydi_get_data(chat_id, inviter.id, inviter_name)
+            data["count"] += 1
+            logger.info(f"✅ {inviter_name} +1 odam qo'shdi (jami: {data['count']})")
+
+
+# ════════════════════════════════════════════════════════════
+#  YANGI KOMANDALAR: /info, /reload, /config
+# ════════════════════════════════════════════════════════════
+
+async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Foydalanuvchi haqida to'liq ma'lumot.
+    Foydalanish: /info | /info @username | /info <user_id> | yoki reply
+    """
+    chat_id = update.effective_chat.id
+    target_user = None
+    target_member = None
+
+    # 1. Reply orqali
+    if update.message.reply_to_message:
+        target_user = update.message.reply_to_message.from_user
+        try:
+            target_member = await context.bot.get_chat_member(chat_id, target_user.id)
+        except Exception:
+            pass
+
+    # 2. Argument orqali (username yoki ID)
+    elif context.args:
+        arg = context.args[0]
+        try:
+            if arg.startswith("@"):
+                chat_obj = await context.bot.get_chat(arg)
+                target_user = chat_obj
+                try:
+                    target_member = await context.bot.get_chat_member(chat_id, chat_obj.id)
+                except Exception:
+                    pass
+            else:
+                uid = int(arg)
+                target_member = await context.bot.get_chat_member(chat_id, uid)
+                target_user = target_member.user
+        except Exception as e:
+            await update.message.reply_text(f"❌ Foydalanuvchi topilmadi: {e}")
+            return
+
+    # 3. O'zi haqida
+    else:
+        target_user = update.effective_user
+        try:
+            target_member = await context.bot.get_chat_member(chat_id, target_user.id)
+        except Exception:
+            pass
+
+    if not target_user:
+        await update.message.reply_text("❌ Foydalanuvchi topilmadi.")
+        return
+
+    # Status tarjimasi
+    status_map = {
+        "creator": "👑 Guruh egasi",
+        "administrator": "⭐️ Admin",
+        "member": "👤 A'zo",
+        "restricted": "🔇 Cheklangan",
+        "left": "🚪 Chiqib ketgan",
+        "kicked": "🚫 Bloklangan",
+    }
+    status_str = "❓ Noma'lum"
+    if target_member:
+        status_str = status_map.get(target_member.status, target_member.status)
+
+    # Username
+    username_str = f"@{target_user.username}" if getattr(target_user, "username", None) else "—"
+
+    # Warn hisob
+    warns_count = user_warns[chat_id].get(target_user.id, 0)
+    s = get_settings(chat_id)
+    max_warns = s.get("max_warns", 3)
+
+    # Sanaydi statistikasi
+    sanaydi_stats = sanaydi_data.get(chat_id, {}).get(target_user.id, {})
+    invited_count = sanaydi_stats.get("count", 0)
+
+    # Til
+    lang = getattr(target_user, "language_code", None) or "—"
+
+    # Bot yoki yo'q
+    is_bot_user = "🤖 Ha" if getattr(target_user, "is_bot", False) else "👤 Yo'q"
+
+    # Premium
+    is_premium = "💎 Ha" if getattr(target_user, "is_premium", False) else "—"
+
+    # To'liq ism
+    full_name = get_name(target_user)
+
+    text = (
+        f"👤 <b>Foydalanuvchi Ma'lumoti</b>\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🪪 <b>Ism:</b> {full_name}\n"
+        f"🔗 <b>Username:</b> {username_str}\n"
+        f"🆔 <b>User ID:</b> <code>{target_user.id}</code>\n"
+        f"🤖 <b>Bot:</b> {is_bot_user}\n"
+        f"💎 <b>Premium:</b> {is_premium}\n"
+        f"🌐 <b>Til:</b> {lang}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"📌 <b>Guruh holati:</b> {status_str}\n"
+        f"⚠️ <b>Ogohlantirishlar:</b> {warns_count}/{max_warns}\n"
+        f"👥 <b>Qo'shgan odamlar:</b> {invited_count}\n"
+        f"━━━━━━━━━━━━━━━━━━━━━\n"
+        f"🔗 <b>Profil:</b> "
+        f"<a href='tg://user?id={target_user.id}'>{full_name}</a>"
+    )
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+
+
+async def cmd_reload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Adminlar ro'yxatini Telegram'dan qayta yuklash va yangilash.
+    /reload — guruh adminlarini bot xotirasiga yuklaydi.
+    """
+    chat_id = update.effective_chat.id
+
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruq faqat guruhlarda ishlaydi.")
+        return
+
+    if not await is_admin(update, context):
+        await update.message.reply_text(MESSAGES["not_admin"], parse_mode=ParseMode.HTML)
+        return
+
+    try:
+        admins = await context.bot.get_chat_administrators(chat_id)
+        admin_list = []
+        lines = ["👑 <b>Adminlar ro'yxati yangilandi!</b>\n"]
+
+        for i, admin in enumerate(admins, 1):
+            if admin.user.is_bot:
+                continue
+            name = get_name(admin.user)
+            status_icon = "👑" if admin.status == ChatMemberStatus.OWNER else "⭐️"
+            lines.append(f"{i}. {status_icon} <b>{name}</b> — <code>{admin.user.id}</code>")
+            admin_list.append(admin.user.id)
+
+        lines.append(f"\n📊 Jami adminlar: <b>{len(admin_list)}</b>")
+        lines.append(f"🔄 Yangilandi: <b>{datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}</b>")
+
+        await update.message.reply_text("\n".join(lines), parse_mode=ParseMode.HTML)
+        add_log(chat_id, "RELOAD_ADMINS", "—", get_name(update.effective_user))
+
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Xatolik: {e}\nBot admin bo'lishi kerak!"
+        )
+
+
+async def cmd_config(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /config — bot sozlamalar panelini ko'rsatish (/settings ga alias).
+    Bir xil funksiya, faqat buyruq nomi farq qiladi.
+    """
+    await cmd_settings(update, context)
+
+
+async def on_bot_added_to_group(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Bot yangi guruhga qo'shilganda yoki admin qilinganda shablon xabar yuborish.
+    MY_CHAT_MEMBER handler orqali ishlaydi.
+    """
+    result = update.my_chat_member
+    old_status = result.old_chat_member.status
+    new_status = result.new_chat_member.status
+
+    chat = update.effective_chat
+
+    # Faqat guruh va superguruhda ishlash
+    if chat.type not in ("group", "supergroup"):
+        return
+
+    # Bot yangi qo'shildi (left/kicked → member/admin)
+    bot_joined = (
+        old_status in (ChatMemberStatus.LEFT, ChatMemberStatus.BANNED, "kicked")
+        and new_status in (ChatMemberStatus.MEMBER, ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
+    )
+
+    # Bot admin qilindi (member → admin)
+    bot_promoted = (
+        old_status == ChatMemberStatus.MEMBER
+        and new_status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
+    )
+
+    if not (bot_joined or bot_promoted):
+        return
+
+    # Bot nomi
+    bot_username = f"@{context.bot.username}" if context.bot.username else "bot"
+
+    text = (
+        f"Salom👋\n\n"
+        f"Men guruhingizni 24soat davomida o'zbekcha va arabcha "
+        f"reklamalarni, ssilkalarni va join, left kabi "
+        f"(kirdi, chiqdilarni) o'chirib tartibni saqlayman 👨🏻‍✈️\n\n"
+        f"Man to'liq ishlashim uchun guruhizga qo'shib "
+        f"<b>ADMIN</b> berishiz kerak😄\n\n"
+        f"/help - Guruhga odam ko'paytirish uchun Batafsil Qo'llanma ☑️"
+    )
+
+    try:
+        await context.bot.send_message(
+            chat_id=chat.id,
+            text=text,
+            parse_mode=ParseMode.HTML,
+        )
+        logger.info(f"✅ Shablon xabar yuborildi: {chat.title} ({chat.id})")
+    except Exception as e:
+        logger.warning(f"❌ Shablon xabar yuborishda xatolik: {e}")
+
+
+# ════════════════════════════════════════════════════════════
 #  BOT ISHGA TUSHIRILISHI
 # ════════════════════════════════════════════════════════════
 def main():
@@ -1375,6 +2022,7 @@ def main():
     # ─── Qorovul buyruqlari ───
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(CommandHandler("help", cmd_help))
+    app.add_handler(CommandHandler("menu", cmd_menu))
     app.add_handler(CommandHandler("settings", cmd_settings))
     app.add_handler(CommandHandler("nightmode", cmd_nightmode))
     app.add_handler(CommandHandler("warn", cmd_warn))
@@ -1403,6 +2051,29 @@ def main():
     app.add_handler(CommandHandler("topweek", cmd_topweek))
     app.add_handler(CommandHandler("groupstats", cmd_groupstats))
 
+    # ─── Sanaydi Bot buyruqlari ───
+    app.add_handler(CommandHandler("guruh", cmd_sanaydi_guruh))
+    app.add_handler(CommandHandler("guruh_off", cmd_sanaydi_guruh_off))
+    app.add_handler(CommandHandler("kanal", cmd_sanaydi_kanal))
+    app.add_handler(CommandHandler("kanal_off", cmd_sanaydi_kanal_off))
+    app.add_handler(CommandHandler("bal", cmd_sanaydi_bal))
+    app.add_handler(CommandHandler("meni", cmd_sanaydi_meni))
+    app.add_handler(CommandHandler("sizni", cmd_sanaydi_sizni))
+    app.add_handler(CommandHandler("sanaydi_top", cmd_sanaydi_top))
+    app.add_handler(CommandHandler("nol", cmd_sanaydi_nol))
+    app.add_handler(CommandHandler("del", cmd_sanaydi_del))
+
+    # ─── Info / Reload / Config buyruqlari ───
+    app.add_handler(CommandHandler("info", cmd_info))
+    app.add_handler(CommandHandler("reload", cmd_reload))
+    app.add_handler(CommandHandler("config", cmd_config))
+
+    # ─── Sanaydi: yangi a'zo kuzatuv handler ───
+    app.add_handler(ChatMemberHandler(on_chat_member_sanaydi, ChatMemberHandler.CHAT_MEMBER))
+
+    # ─── Bot yangi guruhga qo'shilganda shablon xabar ───
+    app.add_handler(ChatMemberHandler(on_bot_added_to_group, ChatMemberHandler.MY_CHAT_MEMBER))
+
     # ─── Callback handler ───
     app.add_handler(CallbackQueryHandler(settings_callback))
 
@@ -1417,9 +2088,9 @@ def main():
 
     print("✅ Universal Qorovul Bot muvaffaqiyatli ishga tushdi!")
     print("📌 Botni guruhga qo'shing va admin qiling.")
-    print("🛡️ Qorovul | 📢 Reklama Tozalash | 📊 Sanoqchi")
+    print("🛡️ Qorovul | 📢 Reklama Tozalash | 📊 Sanoqchi | 👥 Sanaydi")
     print("⚙️ Sozlamalar: /settings")
-    print("📋 Buyruqlar: /help")
+    print("📋 Buyruqlar: /help | /menu")
     print("-" * 50)
 
     app.run_polling(drop_pending_updates=True)
