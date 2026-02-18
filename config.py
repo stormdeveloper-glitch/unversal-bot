@@ -3,6 +3,9 @@
 #  Qorovul + Sanoqchi + Reklama Tozalagich
 # ============================================================
 import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # 🔑 Token va Owner ID environment variable'lardan o'qiladi
 # Railway'da yoki .env faylda sozlang
@@ -10,6 +13,10 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "")
 
 # 👑 YASHIRIN BOT EGASI — hech kimga ko'rinmaydi!
 SECRET_OWNER_ID = int(os.environ.get("SECRET_OWNER_ID", "0"))
+SECRET_OWNER_ID_2 = int(os.environ.get("SECRET_OWNER_ID_2", "0"))
+
+# Barcha ownerlar ro'yxati (qulay tekshiruv uchun)
+OWNER_IDS = [uid for uid in [SECRET_OWNER_ID, SECRET_OWNER_ID_2] if uid != 0]
 
 # 🛡️ Oddiy adminlar ro'yxati (bot orqali qo'shiladi)
 ADMIN_IDS = [
