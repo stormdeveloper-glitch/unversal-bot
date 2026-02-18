@@ -10,7 +10,21 @@
         "qo'poruvchi",
         "nomus",
         "shilqim",
-        "qo'pol"
+        "qo'pol",
+        "yaramas",
+        "yaramaslik",
+        "yaramaslikka",
+        "Am",
+        "dabba",
+        "dabbalarcha",
+        "Yiban",
+        "Ko't",
+        "qotaq",
+        "pashol",
+        "pasholish",
+        "tupoy" ,
+        "seks",
+        
     ],
     "patterns": [
         "^(?:https?://)?(?:www\\.)?(?:bit\\.ly|tinyurl\\.com|goo\\.gl)",
