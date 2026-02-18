@@ -23,7 +23,8 @@
         "pashol",
         "pasholish",
         "tupoy" ,
-        "seks"  
+        "seks",
+        "Mol"
     ],
     "patterns": [
         "^(?:https?://)?(?:www\\.)?(?:bit\\.ly|tinyurl\\.com|goo\\.gl)",
