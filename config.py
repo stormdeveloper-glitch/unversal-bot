@@ -43,10 +43,6 @@ DEFAULT_SETTINGS = {
     # Bad words filtri
     "bad_words_filter": True,
 
-    # Captcha — yangi a'zo tekshiruvi
-    "captcha_enabled": True,
-    "captcha_timeout": 120,
-
     # Tungi rejim
     "night_mode": False,
     "night_start_hour": 23,
@@ -115,17 +111,6 @@ AD_PATTERNS = [
 
 # ───────────── Xabarlar (O'zbek tilida) ─────────────
 MESSAGES = {
-    "welcome": (
-        "👋 Salom, <b>{name}</b>!\n\n"
-        "Guruhga xush kelibsiz! Siz haqiqiy odam ekanligingizni tasdiqlash uchun "
-        "quyidagi savolga javob bering:\n\n"
-        "🧮 <b>{question}</b> = ?\n\n"
-        "⏳ Javob berish uchun {timeout} soniya vaqtingiz bor."
-    ),
-    "captcha_success": "✅ <b>{name}</b>, tekshiruvdan muvaffaqiyatli o'tdingiz! Yoqimli suhbat!",
-    "captcha_fail": "❌ <b>{name}</b>, vaqt tugadi. Siz guruhdan chiqarildingiz. Qayta qo'shilishingiz mumkin.",
-    "captcha_wrong": "❌ Noto'g'ri javob! Qaytadan urinib ko'ring.",
-
     "spam_warn": "⚠️ <b>{name}</b>, spam qilmang! Ogohlantirish berildi.",
     "spam_muted": "🔇 <b>{name}</b> spam tufayli {duration} daqiqaga ovozi o'chirildi.",
     "spam_banned": "🚫 <b>{name}</b> spam tufayli guruhdan chiqarildi.",

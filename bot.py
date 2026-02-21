@@ -64,9 +64,6 @@ message_timestamps: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict
 # Sticker spam:        { chat_id: { user_id: [timestamps] } }
 sticker_timestamps: dict[int, dict[int, list]] = defaultdict(lambda: defaultdict(list))
 
-# Captcha ma'lumotlari: { chat_id: { user_id: { answer, msg_id, timestamp } } }
-pending_captcha: dict[int, dict[int, dict]] = defaultdict(dict)
-
 # Log tarixi:          { chat_id: [ { action, user, admin, time, reason } ] }
 action_logs: dict[int, list] = defaultdict(list)
 
@@ -172,23 +169,6 @@ async def is_bot_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bo
     return bot_member.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
 
 
-def generate_captcha() -> tuple[str, int]:
-    """Matematik captcha yaratish."""
-    ops = [
-        ("+", lambda a, b: a + b),
-        ("-", lambda a, b: a - b),
-        ("×", lambda a, b: a * b),
-    ]
-    op_symbol, op_func = random.choice(ops)
-    a = random.randint(1, 20)
-    b = random.randint(1, 10)
-    if op_symbol == "-" and a < b:
-        a, b = b, a
-    question = f"{a} {op_symbol} {b}"
-    answer = op_func(a, b)
-    return question, answer
-
-
 # ════════════════════════════════════════════════════════════
 #  KOMANDALAR — ASOSIY
 # ════════════════════════════════════════════════════════════
@@ -200,7 +180,6 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "<b>🔰 Qorovul:</b>\n"
         "├ Anti-spam va flood himoyasi\n"
         "├ Havola bloklash\n"
-        "├ Yangi a'zolar uchun captcha\n"
         "├ Nojo'ya so'zlarni filtrlash\n"
         "├ Tungi rejim\n"
         "└ Warn / Mute / Ban tizimi\n\n"
@@ -319,7 +298,6 @@ def build_settings_keyboard(chat_id: int) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{status('bad_words_filter')} So'z Filtri", callback_data="toggle_bad_words_filter"),
         ],
         [
-            InlineKeyboardButton(f"{status('captcha_enabled')} Captcha", callback_data="toggle_captcha_enabled"),
             InlineKeyboardButton(f"{status('night_mode')} Tungi Rejim", callback_data="toggle_night_mode"),
         ],
         [
@@ -363,7 +341,6 @@ async def cmd_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔹 Spam limiti: <b>{s['spam_message_limit']}</b> xabar / <b>{s['spam_time_window']}</b> son.\n"
         f"🔹 Mute davomiyligi: <b>{s['mute_duration_minutes']}</b> daqiqa\n"
         f"🔹 Max ogohlantirishlar: <b>{s['max_warns']}</b>\n"
-        f"🔹 Captcha vaqti: <b>{s['captcha_timeout']}</b> soniya\n"
         f"🔹 Tungi rejim: <b>{s['night_start_hour']}:00 — {s['night_end_hour']}:00</b>\n\n"
         "Tugmalarni bosib sozlamalarni o'zgartiring:"
     )
@@ -404,205 +381,6 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.message.edit_reply_markup(reply_markup=build_settings_keyboard(chat_id))
 
-
-# ════════════════════════════════════════════════════════════
-#  CAPTCHA — YANGI A'ZO TEKSHIRUVI
-# ════════════════════════════════════════════════════════════
-async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Yangi a'zo qo'shilganda captcha berish."""
-    chat_id = update.effective_chat.id
-    s = get_settings(chat_id)
-
-    for member in update.message.new_chat_members:
-        if member.is_bot:
-            continue
-
-        # Yangi a'zo vaqtini saqlash
-        new_member_times[chat_id][member.id] = time.time()
-
-        if not s["captcha_enabled"]:
-            # Captcha o'chiq — oddiy welcome
-            welcome = f"👋 Salom, <b>{get_name(member)}</b>! Guruhga xush kelibsiz!"
-            await update.message.reply_text(welcome, parse_mode=ParseMode.HTML)
-            continue
-
-        # Captcha yoqiq — tekshiruv
-        question, answer = generate_captcha()
-
-        # Foydalanuvchini vaqtincha cheklash
-        try:
-            await context.bot.restrict_chat_member(
-                chat_id, member.id,
-                ChatPermissions(
-                    can_send_messages=False,
-                    can_send_other_messages=False,
-                    can_add_web_page_previews=False,
-                ),
-            )
-        except Exception as e:
-            logger.warning(f"Captcha restrict xatolik: {e}")
-
-        text = MESSAGES["welcome"].format(
-            name=get_name(member),
-            question=question,
-            timeout=s["captcha_timeout"],
-        )
-        msg = await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-
-        pending_captcha[chat_id][member.id] = {
-            "answer": answer,
-            "msg_id": msg.message_id,
-            "timestamp": time.time(),
-        }
-
-        # Timeout uchun job
-        context.job_queue.run_once(
-            captcha_timeout,
-            s["captcha_timeout"],
-            data={"chat_id": chat_id, "user_id": member.id},
-            name=f"captcha_{chat_id}_{member.id}",
-        )
-
-
-async def captcha_timeout(context: ContextTypes.DEFAULT_TYPE):
-    """Captcha vaqti tugaganda."""
-    data = context.job.data
-    chat_id = data["chat_id"]
-    user_id = data["user_id"]
-
-    if chat_id in pending_captcha and user_id in pending_captcha[chat_id]:
-        info = pending_captcha[chat_id].pop(user_id)
-        try:
-            member = await context.bot.get_chat_member(chat_id, user_id)
-            name = get_name(member.user)
-            # Guruhdan chiqarish
-            await context.bot.ban_chat_member(chat_id, user_id)
-            await context.bot.unban_chat_member(chat_id, user_id)  # qayta kirish uchun
-
-            text = MESSAGES["captcha_fail"].format(name=name)
-            await context.bot.send_message(chat_id, text, parse_mode=ParseMode.HTML)
-            add_log(chat_id, "CAPTCHA_FAIL", name, "Bot", "Vaqt tugadi")
-        except Exception as e:
-            logger.warning(f"Captcha timeout xatolik: {e}")
-
-        # Captcha xabarini o'chirish
-        try:
-            await context.bot.delete_message(chat_id, info["msg_id"])
-        except Exception:
-            pass
-
-
-async def on_message_captcha_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Captcha javobini tekshirish."""
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-
-    if chat_id not in pending_captcha or user_id not in pending_captcha[chat_id]:
-        return False  # Bu foydalanuvchi captcha kutilmayapti
-
-    info = pending_captcha[chat_id][user_id]
-    text = (update.message.text or "").strip()
-
-    try:
-        user_answer = int(text)
-    except (ValueError, TypeError):
-        return True  # Raqam emas — e'tiborsiz qoldirish
-
-    if user_answer == info["answer"]:
-        # To'g'ri javob!
-        pending_captcha[chat_id].pop(user_id)
-
-        # Job'ni bekor qilish
-        jobs = context.job_queue.get_jobs_by_name(f"captcha_{chat_id}_{user_id}")
-        for job in jobs:
-            job.schedule_removal()
-
-        # Cheklovlarni olib tashlash
-        try:
-            await context.bot.restrict_chat_member(
-                chat_id, user_id,
-                ChatPermissions(
-                    can_send_messages=True,
-                    can_send_other_messages=True,
-                    can_add_web_page_previews=True,
-                    can_send_polls=True,
-                    can_invite_users=True,
-                    can_pin_messages=False,
-                    can_manage_topics=False,
-                ),
-            )
-        except Exception:
-            pass
-
-        name = get_name(update.effective_user)
-        success_text = MESSAGES["captcha_success"].format(name=name)
-        await update.message.reply_text(success_text, parse_mode=ParseMode.HTML)
-        add_log(chat_id, "CAPTCHA_OK", name)
-
-        # Captcha xabarini o'chirish
-        try:
-            await context.bot.delete_message(chat_id, info["msg_id"])
-        except Exception:
-            pass
-
-        return True  # Captcha hal qilindi
-    else:
-        # Noto'g'ri javob
-        await update.message.reply_text(
-            MESSAGES["captcha_wrong"], parse_mode=ParseMode.HTML
-        )
-        return True
-
-
-# ════════════════════════════════════════════════════════════
-#  ANTI-SPAM — FLOOD HIMOYASI
-# ════════════════════════════════════════════════════════════
-async def check_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Spam tekshiruvi. True qaytarsa = spam aniqlandi."""
-    chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
-    s = get_settings(chat_id)
-
-    if not s["anti_spam"]:
-        return False
-
-    now = time.time()
-    timestamps = message_timestamps[chat_id][user_id]
-    timestamps.append(now)
-
-    # Eski timestamplarni tozalash
-    cutoff = now - s["spam_time_window"]
-    message_timestamps[chat_id][user_id] = [t for t in timestamps if t > cutoff]
-
-    if len(message_timestamps[chat_id][user_id]) > s["spam_message_limit"]:
-        name = get_name(update.effective_user)
-        duration = s["mute_duration_minutes"]
-
-        if s["spam_action"] == "ban":
-            try:
-                await context.bot.ban_chat_member(chat_id, user_id)
-                text = MESSAGES["spam_banned"].format(name=name)
-                await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-                add_log(chat_id, "SPAM_BAN", name, "Bot")
-            except Exception as e:
-                logger.warning(f"Spam ban xatolik: {e}")
-        else:
-            try:
-                until = datetime.now(timezone.utc) + timedelta(minutes=duration)
-                await context.bot.restrict_chat_member(
-                    chat_id, user_id,
-                    ChatPermissions(can_send_messages=False),
-                    until_date=until,
-                )
-                text = MESSAGES["spam_muted"].format(name=name, duration=duration)
-                await update.message.reply_text(text, parse_mode=ParseMode.HTML)
-                add_log(chat_id, "SPAM_MUTE", name, "Bot", f"{duration} daqiqa")
-            except Exception as e:
-                logger.warning(f"Spam mute xatolik: {e}")
-
-        # Timestamplarni tozalash
-        message_timestamps[chat_id][user_id] = []
-        return True
 
     return False
 
@@ -1340,15 +1118,10 @@ async def cmd_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🔹 Forward o'chirilgan: <b>{stats.get('FORWARD_DELETED', 0)}</b>\n"
         f"🔹 Nojo'ya so'zlar: <b>{stats.get('BAD_WORD', 0) + stats.get('BAD_PATTERN', 0)}</b>\n"
         f"🔹 Ogohlantirishlar: <b>{stats.get('WARN', 0)}</b>\n"
-        f"🔹 Banlar: <b>{stats.get('BAN', 0) + stats.get('WARN_BAN', 0)}</b>\n"
-        f"🔹 Captcha muvaffaqiyatli: <b>{stats.get('CAPTCHA_OK', 0)}</b>\n"
-        f"🔹 Captcha muvaffaqiyatsiz: <b>{stats.get('CAPTCHA_FAIL', 0)}</b>\n\n"
-        f"⚠️ Aktiv ogohlantirishlar: <b>{warns_count}</b>\n"
-        f"🧮 Captcha kutilmoqda: <b>{captcha_pending}</b>\n\n"
+        f"⚠️ Aktiv ogohlantirishlar: <b>{warns_count}</b>\n\n"
         f"⚙️ Anti-Spam: {'✅' if s['anti_spam'] else '❌'} | "
         f"Anti-Link: {'✅' if s['anti_link'] else '❌'}\n"
-        f"⚙️ Captcha: {'✅' if s['captcha_enabled'] else '❌'} | "
-        f"Tungi rejim: {'✅' if s['night_mode'] else '❌'}"
+        f"⚙️ Tungi rejim: {'✅' if s['night_mode'] else '❌'}"
     )
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
@@ -1387,11 +1160,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         return
 
-    # 1. Captcha tekshiruvi
-    if await on_message_captcha_check(update, context):
-        return
-
-    # 2. Tungi rejim
+    # 1. Tungi rejim
     if await check_night_mode(update, context):
         return
 
