@@ -379,13 +379,26 @@ async def settings_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if key == "night_mode":
                 await apply_night_mode(context, chat_id, s[key])
 
-    await query.message.edit_reply_markup(reply_markup=build_settings_keyboard(chat_id))
-
-
-    return False
-
-
 # ════════════════════════════════════════════════════════════
+#  ON_NEW_MEMBER — YANGI A'ZOLARNI KUTIB OLISH
+# ════════════════════════════════════════════════════════════
+async def on_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Yangi a'zo qo'shilganda kutib olish."""
+    chat_id = update.effective_chat.id
+
+    for member in update.message.new_chat_members:
+        if member.is_bot:
+            continue
+
+        # Yangi a'zo vaqtini saqlash
+        new_member_times[chat_id][member.id] = time.time()
+
+        # Salomlashish xabari
+        welcome = f"👋 Salom, <b>{get_name(member)}</b>! Guruhga xush kelibsiz!"
+        await update.message.reply_text(welcome, parse_mode=ParseMode.HTML)
+
+
+
 #  ANTI-STICKER SPAM
 # ════════════════════════════════════════════════════════════
 async def check_sticker_spam(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
