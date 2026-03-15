@@ -86,8 +86,12 @@ async def is_bot_admin(update: Update,
     """Bot admin yoki yo'qligini tekshirish."""
     try:
         m = await context.bot.get_chat_member(update.effective_chat.id, context.bot.id)
-        return m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER)
-    except Exception:
+        if m.status in (ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.OWNER):
+            return True
+        logger.warning(f"Bot guruhda admin emas! Chat ID: {update.effective_chat.id}")
+        return False
+    except Exception as e:
+        logger.error(f"is_bot_admin tekshirishda xatolik: {e}")
         return False
 
 

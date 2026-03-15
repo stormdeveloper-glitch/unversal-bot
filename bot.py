@@ -240,6 +240,39 @@ async def cmd_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
+async def cmd_check(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Diagnostika buyrug'i."""
+    if update.effective_chat.type == "private":
+        await update.message.reply_text("❌ Bu buyruqni guruhda ishlating.")
+        return
+
+    chat_id = update.effective_chat.id
+    bot_id  = context.bot.id
+
+    status_text = f"🛡️ <b>Diagnostika: {update.effective_chat.title}</b>\n\n"
+
+    # 1. Bot Adminlik
+    try:
+        member = await context.bot.get_chat_member(chat_id, bot_id)
+        is_adm = member.status in ("administrator", "creator")
+        adm_status = "Ha" if is_adm else "Yo'q"
+        status_text += f"{'✅' if is_adm else '❌'} <b>Bot Admin:</b> {adm_status}\n"
+        
+        if is_adm:
+            can_del = member.can_delete_messages
+            del_status = "Ruxsat bor" if can_del else "Ruxsat YO'Q"
+            status_text += f"{'✅' if can_del else '❌'} <b>Xabar o'chirish:</b> {del_status}\n"
+    except Exception as e:
+        status_text += f"❌ <b>Admin tekshiruvi:</b> Xatolik ({e})\n"
+
+    # 2. Privacy Mode Check (Implicit)
+    status_text += "\n💡 <b>Maslahatlar:</b>\n"
+    status_text += "• Agar bot xabarlarni o'chirmasa, unga 'Delete messages' huquqini bering.\n"
+    status_text += "• Agar bot xabarlarni ko'rmasa, @BotFather orqali <b>Privacy Mode</b> ni OFF qiling.\n"
+
+    await update.message.reply_text(status_text, parse_mode=ParseMode.HTML)
+
+
 # ════════════════════════════════════════════════════════════
 #  BOT GURUHGA QO'SHILGANDA
 # ════════════════════════════════════════════════════════════
@@ -306,6 +339,8 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not await is_bot_admin(update, context):
+        # Admin bo'lmasa log yozamiz, lekin foydalanuvchini har xabarda bezovta qilmaymiz
+        logger.debug(f"Bot admin emas, filtrlar o'tkazib yuborildi. Chat: {chat_id}")
         return
 
     # Filtrlar ketma-ketligi
@@ -325,7 +360,7 @@ async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if await check(update, context):
                 return
         except Exception as e:
-            logger.warning(f"Filter xatoligi [{check.__name__}]: {e}")
+            logger.warning(f"Filter xatoligi [{check.__name__ if hasattr(check, '__name__') else 'lambda'}]: {e}")
 
 
 # ════════════════════════════════════════════════════════════
@@ -420,6 +455,7 @@ def main():
     app.add_handler(CommandHandler("start",  cmd_start))
     app.add_handler(CommandHandler("help",   cmd_menu))
     app.add_handler(CommandHandler("menu",   cmd_menu))
+    app.add_handler(CommandHandler("check",  cmd_check))
 
     # ── ChatMember handlerlar ─────────────────
     app.add_handler(ChatMemberHandler(on_chat_member_sanaydi, ChatMemberHandler.CHAT_MEMBER))
