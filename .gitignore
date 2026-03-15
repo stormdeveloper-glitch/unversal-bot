@@ -1,0 +1,10 @@
+.env
+*.log
+__pycache__/
+*.pyc
+logs/
+.DS_Store
+node_modules/
+dist/
+build/
+.railway/

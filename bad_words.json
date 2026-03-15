@@ -1,0 +1,34 @@
+{
+    "words": [
+        "axmoq",
+        "tentak",
+        "jinni",
+        "ablah",
+        "harom",
+        "iflos",
+        "badkirdor",
+        "qo'poruvchi",
+        "nomus",
+        "shilqim",
+        "qo'pol",
+        "yaramas",
+        "yaramaslik",
+        "yaramaslikka",
+        "Am",
+        "dabba",
+        "dabbalarcha",
+        "Yiban",
+        "Ko't",
+        "qotaq",
+        "pashol",
+        "pasholish",
+        "tupoy" ,
+        "seks",
+        "Mol"
+    ],
+    "patterns": [
+        "^(?:https?://)?(?:www\\.)?(?:bit\\.ly|tinyurl\\.com|goo\\.gl)",
+        "earn.*money.*fast",
+        "free.*bitcoin"
+    ]
+}
